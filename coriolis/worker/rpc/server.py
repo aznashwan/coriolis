@@ -39,7 +39,14 @@ class _ConductorProviderEventHandler(events.BaseEventHandler):
     def __init__(self, ctxt, task_id):
         self._ctxt = ctxt
         self._task_id = task_id
-        self._rpc_conductor_client = rpc_conductor_client.ConductorClient()
+        self._rpc_conductor_client_instance = None
+
+    @property
+    def _rpc_conductor_client(self):
+        if self._rpc_conductor_client_instance is None:
+            self._rpc_conductor_client_instance = (
+                rpc_conductor_client.ConductorClient())
+        return self._rpc_conductor_client_instance
 
     def progress_update(self, current_step, total_steps, message):
         LOG.info("Progress update: %s", message)

@@ -196,6 +196,9 @@ def minion_pool_synchronized(func):
 class ConductorServerEndpoint(object):
     def __init__(self):
         self._licensing_client = licensing_client.LicensingClient.from_env()
+        self._worker_client_instance = None
+        self._scheduler_client_instance = None
+        self._replica_cron_client_instance = None
 
     # NOTE(aznashwan): it is unsafe to fork processes with pre-instantiated
     # oslo_messaging clients as the underlying eventlet thread queues will
@@ -203,16 +206,25 @@ class ConductorServerEndpoint(object):
     # process" as well as forking child processes, it is safest to
     # re-instantiate the clients every time:
     @property
-    def _rpc_worker_client(self):
-        return rpc_worker_client.WorkerClient()
+    def _worker_client(self):
+        if not self._worker_client_instance:
+            self._worker_client_instance = (
+                rpc_worker_client.WorkerClient())
+        return self._worker_client_instance
 
     @property
     def _scheduler_client(self):
-        return rpc_scheduler_client.SchedulerClient()
+        if not self._scheduler_client_instance:
+            self._scheduler_client_instance = (
+                rpc_scheduler_client.SchedulerClient())
+        return self._scheduler_client_instance
 
     @property
     def _replica_cron_client(self):
-        return rpc_cron_client.ReplicaCronClient()
+        if not self._replica_cron_client_instance:
+            self._replica_cron_client_instance = (
+                rpc_cron_client.ReplicaCronClient())
+        return self._replica_cron_client_instance
 
     def get_all_diagnostics(self, ctxt):
         diagnostics = [
@@ -222,28 +234,10 @@ class ConductorServerEndpoint(object):
         worker_diagnostics = []
         for worker_service in self._scheduler_client.get_workers_for_specs(
                 ctxt):
-            worker_rpc = self._get_rpc_client_for_service(worker_service)
+            worker_rpc = self._get_worker_rpc_for_host(worker_service['host'])
             diagnostics.append(worker_rpc.get_diagnostics(ctxt))
 
         return diagnostics
-
-    def _get_rpc_client_for_service(self, service, *client_args, **client_kwargs):
-        rpc_client_class = RPC_TOPIC_TO_CLIENT_CLASS_MAP.get(service.topic)
-        if not rpc_client_class:
-            raise exception.NotFound(
-                "No RPC client class for service with topic '%s'." % (
-                    service.topic))
-
-        topic = service.topic
-        if service.topic == constants.WORKER_MAIN_MESSAGING_TOPIC:
-            # NOTE: coriolis.service.MessagingService-type services (such
-            # as the worker), always have a dedicated per-host queue
-            # which can be used to target the service:
-            topic = constants.SERVICE_MESSAGING_TOPIC_FORMAT % ({
-                "main_topic": constants.WORKER_MAIN_MESSAGING_TOPIC,
-                "host": service.host})
-
-        return rpc_client_class(*client_args, topic=topic, **client_kwargs)
 
     def _get_any_worker_service(self, ctxt, random_choice=False, raw_dict=False):
         services = self._scheduler_client.get_workers_for_specs(ctxt)
@@ -256,13 +250,8 @@ class ConductorServerEndpoint(object):
             return service
         return db_api.get_service(ctxt, service['id'])
 
-    def _get_worker_rpc_for_host(self, host, *client_args, **client_kwargs):
-        rpc_client_class = RPC_TOPIC_TO_CLIENT_CLASS_MAP[
-            constants.WORKER_MAIN_MESSAGING_TOPIC]
-        topic = constants.SERVICE_MESSAGING_TOPIC_FORMAT % ({
-            "main_topic": constants.WORKER_MAIN_MESSAGING_TOPIC,
-            "host": host})
-        return rpc_client_class(*client_args, topic=topic, **client_kwargs)
+    def _get_worker_rpc_for_host(self, worker_host, **client_kwargs):
+        return rpc_worker_client.WorkerClient(host=worker_host, **client_kwargs)
 
     def _get_worker_service_rpc_for_specs(
             self, ctxt, provider_requirements=None, region_sets=None,
@@ -288,12 +277,11 @@ class ConductorServerEndpoint(object):
         selected_service = services[0]
         if random_choice:
             selected_service = random.choice(services)
-        service = db_api.get_service(ctxt, selected_service["id"])
 
         LOG.info(
             "Was offered Worker Service with ID '%s' for requirements: %s",
-            service.id, requirements_str)
-        return self._get_rpc_client_for_service(service)
+            selected_service['id'], requirements_str)
+        return self._get_worker_rpc_for_host(selected_service['host'])
 
     def _check_delete_reservation_for_transfer(self, transfer_action):
         action_id = transfer_action.base_id
@@ -579,14 +567,14 @@ class ConductorServerEndpoint(object):
     def get_available_providers(self, ctxt):
         # TODO(aznashwan): merge list of all providers from all
         # worker services:
-        worker_rpc = self._get_rpc_client_for_service(
-            self._get_any_worker_service(ctxt))
+        worker_rpc = self._get_worker_rpc_for_host(
+            self._get_any_worker_service(ctxt)['host'])
         return worker_rpc.get_available_providers(ctxt)
 
     def get_provider_schemas(self, ctxt, platform_name, provider_type):
         # TODO(aznashwan): merge or version/namespace schemas for each worker?
-        worker_rpc = self._get_rpc_client_for_service(
-            self._get_any_worker_service(ctxt))
+        worker_rpc = self._get_worker_rpc_for_host(
+            self._get_any_worker_service(ctxt)['host'])
         return worker_rpc.get_provider_schemas(
             ctxt, platform_name, provider_type)
 
@@ -754,7 +742,7 @@ class ConductorServerEndpoint(object):
                         retry_count=scheduling_retry_count,
                         retry_period=scheduling_retry_period)
                     worker_rpc.begin_task(
-                        ctxt, server=None,
+                        ctxt,
                         task_id=task.id,
                         task_type=task.task_type,
                         origin=origin,
@@ -2507,10 +2495,8 @@ class ConductorServerEndpoint(object):
                             # cancellation call to prevent the conductor from
                             # hanging an excessive amount of time:
                             task.host, timeout=10)
-                        # NOTE: the RPC client is already prepped with the
-                        # right topic so we pass 'None' as the server host:
                         worker_rpc.cancel_task(
-                            ctxt, None, task.id, task.process_id, force)
+                            ctxt, task.id, task.process_id, force)
                     except (Exception, KeyboardInterrupt):
                         msg = (
                             "Failed to send cancellation request for task '%s'"
@@ -2916,7 +2902,7 @@ class ConductorServerEndpoint(object):
                 worker_rpc = self._get_worker_service_rpc_for_task(
                     ctxt, task, origin_endpoint, destination_endpoint)
                 worker_rpc.begin_task(
-                    ctxt, server=None,
+                    ctxt,
                     task_id=task.id,
                     task_type=task.task_type,
                     origin=origin,
@@ -3951,7 +3937,7 @@ class ConductorServerEndpoint(object):
         service.status = constants.SERVICE_STATUS_UP
 
         if None in (providers, specs):
-            worker_rpc = self._get_rpc_client_for_service(service)
+            worker_rpc = self._get_worker_rpc_for_host(service['host'])
             status = worker_rpc.get_service_status(ctxt)
 
             service.providers = status["providers"]
@@ -4000,7 +3986,7 @@ class ConductorServerEndpoint(object):
     def refresh_service_status(self, ctxt, service_id):
         LOG.debug("Updating registration for worker service '%s'", service_id)
         service = db_api.get_service(ctxt, service_id)
-        worker_rpc = self._get_rpc_client_for_service(service)
+        worker_rpc = self._get_worker_rpc_for_host(service['host'])
         status = worker_rpc.get_service_status(ctxt)
         updated_values = {
             "providers": status["providers"],
