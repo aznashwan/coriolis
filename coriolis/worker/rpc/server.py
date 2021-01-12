@@ -636,6 +636,7 @@ def _setup_task_process(mp_log_q):
 
 def _task_process(ctxt, task_id, task_type, origin, destination, instance,
                   task_info, mp_q, mp_log_q):
+    ctxt.coriolis_task_id = "task-%s" % task_id
     try:
         _setup_task_process(mp_log_q)
 

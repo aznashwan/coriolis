@@ -19,7 +19,7 @@ class RequestContext(context.RequestContext):
                  overwrite=True, domain_name=None, domain_id=None,
                  user_domain_name=None, user_domain_id=None,
                  project_domain_name=None, project_domain_id=None,
-                 show_deleted=None, trust_id=None,
+                 show_deleted=None, trust_id=None, coriolis_task_id=None,
                  delete_trust_id=False, **kwargs):
 
         super(RequestContext, self).__init__(auth_token=auth_token,
@@ -47,6 +47,7 @@ class RequestContext(context.RequestContext):
         self.timestamp = timestamp
         self.trust_id = trust_id
         self.delete_trust_id = delete_trust_id
+        self.coriolis_task_id = coriolis_task_id
 
     def to_dict(self):
         result = super(RequestContext, self).to_dict()
@@ -66,6 +67,7 @@ class RequestContext(context.RequestContext):
         result['show_deleted'] = self.show_deleted
         result['trust_id'] = self.trust_id
         result['delete_trust_id'] = self.delete_trust_id
+        result['coriolis_task_id'] = self.coriolis_task_id
         return result
 
     @classmethod
