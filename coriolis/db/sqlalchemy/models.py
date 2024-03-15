@@ -17,6 +17,9 @@ BASE = declarative.declarative_base()
 
 class TaskEvent(BASE, models.TimestampMixin, models.SoftDeleteMixin,
                 models.ModelBase):
+
+    MAX_EVENT_MESSAGE_LENGHT = 1024
+
     __tablename__ = 'task_event'
 
     id = sqlalchemy.Column(sqlalchemy.String(36),
@@ -27,7 +30,7 @@ class TaskEvent(BASE, models.TimestampMixin, models.SoftDeleteMixin,
                                 nullable=False)
     level = sqlalchemy.Column(sqlalchemy.String(20), nullable=False)
     index = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
-    message = sqlalchemy.Column(sqlalchemy.String(1024), nullable=False)
+    message = sqlalchemy.Column(sqlalchemy.String(MAX_EVENT_MESSAGE_LENGHT), nullable=False)
 
     def to_dict(self):
         result = {
